@@ -1,0 +1,29 @@
+{
+  "check_count_query": "SELECT COUNT(*) FROM ({}) AS counted_table",
+  "timestamp_column": "",
+  "group_by": ["ciudad_residencia"],
+  "order_by": ["ciudad_residencia "],
+  "order_type": "ASC",
+  "select_items": ["ciudad_residencia"],
+  "group_metrics": ["count(*) as value"],
+  "where": [
+    {
+      "column": "valor_aprobado",
+      "comparator": "<=",
+      "value": "1000000"
+    }
+  ],
+  "having": [],
+  "where_clause": "",
+  "having_clause": "",
+  "woombat_db": "8096_woombat",
+  "db1": "8096_woombat",
+  "db2": "datamart_banca_digital",
+  "db": "8096_tec_planeacion_y_riesgo",
+  "table": "credito_digital",
+  "fact_banca_digital_table": "fact_banca_digital",
+  "dim_producto_movil_table": "dim_producto_movil",
+  "dim_producto_movil_descripcion": "descripcion",
+  "dim_producto_movil_horaminuto": "horaminuto",
+  "user_action_table": "dt_useraction"
+}

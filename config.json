@@ -1,0 +1,9 @@
+{
+  "impala_host": "savcedge-a2ab52cc.ms.davivienda.cloud:25003",
+  "db_host": "savcedge-a2ab52cc.ms.davivienda.cloud",
+  "ldap_host": "ldap://dcdg01.davivienda.loc",
+  "ldap_base": "DC=davivienda,DC=loc",
+  "kerberos_user": "s-aprovisionamiento",
+  "cert_path": "/opt/cloudera/security/pki/agent.cert.pem",
+  "cert_key": "/opt/cloudera/security/pki/agent.d.key"
+}
