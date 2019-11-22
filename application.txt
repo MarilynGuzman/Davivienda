@@ -1,0 +1,221 @@
+from flask import Flask, request
+from flask_restful import Api
+from flask_cors import CORS, cross_origin
+
+import ldap, ldap.sasl
+
+from utils import *
+from filter_tool import *
+import impala_shell_utils as isu
+
+application = Flask(__name__)
+# app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+api = Api(application)
+# CORS(app, resources=r'/*', allow_headers=['Content-Type', "Access-Control-Allow-Credentials"])
+CORS(application, resources={r'/*': {"origins": "*"}},
+     allow_headers=['Content-Type', "Access-Control-Allow-Credentials"])
+
+
+class Server:
+    def __init__(self):
+        self.config = load_config()
+        self.query_metadata = load_query_metadata()
+        self.ldap_host = self.config['ldap_host']
+        print('connecting')
+        kerberos_initializer(self.config['kerberos_user'])
+        # self.cursor = get_impala_cursor(self.config['db_host'])
+        print('connected')
+
+    def reconnect(self):
+        print('reconnecting')
+        kerberos_initializer(self.config['kerberos_user'])
+        # self.cursor = get_impala_cursor(self.config['db_host'])
+        print('reconnected')
+
+
+server = Server()
+
+def check_results_length(query):
+    count_query = server.query_metadata['check_count_query'].format(query)
+    results = execute_query(count_query, False)
+    print results
+    return results[0][0]
+
+
+def execute_query(query, check_length=True):
+    if check_length and check_results_length(query) > 500:
+        return [('error','results_too_long')]
+    else:
+
+        print('--Attempting to execute \"{}\"'.format(query))
+        try:
+            return isu.impala_shell_execute(query)
+        except Exception as e:
+            print('--Connection failed')
+            print(e)
+            server.reconnect()
+            execute_query(query, False)
+
+
+@application.route('/credito_digital')
+@cross_origin()
+def credito_digital():
+    query_metadata = server.query_metadata
+    db = query_metadata['db']
+    table = query_metadata['table']
+    query = """
+                SELECT 
+                COUNT(*) AS COUNT, 
+                SUM({}) AS SUM 
+                FROM {}.{}""".format("".join(request.args.get('column')), "".join(db), "".join(table))
+    if request.args.get('filter'):
+        query += json_to_filter_query(request.args.get('filter'))
+    # return query, 200
+
+    results = execute_query(query)
+    data = results_to_json(server.cursor.description, results)
+    return json_to_string(data), 200
+
+
+@application.route('/fact_banca_digital')
+@cross_origin()
+def fact_banca_digital():
+    query_metadata = server.query_metadata
+
+    if request.args.get('operation') == 'COUNT':
+        operation = """COUNT({})""".format("".join(request.args.get('operation_column')))
+    elif request.args.get('operation') == 'SUM':
+        operation = """SUM({})""".format("".join(request.args.get('operation_column')))
+    else:
+        operation = 'COUNT(*)'
+
+    filter = 'True'
+    if request.args.get('filter'):
+        filter = json_to_filter_query(request.args.get('filter'))
+
+    query = """
+    SELECT 
+        {descripcion} as {column}, 
+        {operation} AS VALUE,
+        MAX({timestamp_name}) as {timestamp_name}
+    FROM (
+        SELECT DISTINCT 
+            T.{column},
+            {timestamp_name},
+            {descripcion}, 
+            {operation_column}, 
+            {horaminuto}, 
+            {periodo}
+        FROM {database}.{table} T 
+        JOIN {woombat_database}.{producto_movil_table} D 
+        ON T.{column} = D.{column} 
+        JOIN (
+            SELECT 
+                MAX({periodo} * 1000000 + {horaminuto}) AS {timestamp_name},
+                {column}
+            FROM {database}.{table}
+            GROUP BY {column}) S
+        ON T.{column} = S.{column} 
+    ) F 
+    WHERE {filter} 
+    GROUP BY {descripcion}""".format(
+        descripcion=query_metadata['dim_producto_movil_descripcion'],
+        column=request.args.get('column'),
+        operation=operation,
+        operation_column=request.args.get('operation_column'),
+        periodo='periodo',
+        horaminuto='horaminuto',
+        timestamp_name='ts',
+        database=query_metadata['db'],
+        table=query_metadata['fact_banca_digital_table'],
+        woombat_database=query_metadata['woombat_db'],
+        producto_movil_table=query_metadata['dim_producto_movil_table'],
+        filter=filter
+    )
+    # return query, 200
+    print query
+
+    results = execute_query(query, False)
+    print results
+    data = results_to_array(server.cursor.description, results)
+    return json_to_string(data), 200
+
+
+@application.route('/dt_accion_de_usuario')
+@cross_origin()
+def accion_de_usuario():
+    query_metadata = server.query_metadata
+
+    where_clause = 'True'
+
+    if request.args.get('filter'):
+        where_clause = json_to_filter_query(request.args.get('filter'))
+
+    query = """SELECT 
+                   name, 
+                   count(*) 
+               FROM {db}.{user_action_table}
+               WHERE {where_clause}
+               GROUP BY name""".format(
+        db=query_metadata['db'],
+        user_action_table=query_metadata['user_action_table'],
+        where_clause=where_clause
+    )
+
+    results = execute_query(query)
+    print results
+    data = results_to_array(server.cursor.description, results)
+    return json_to_string(data), 200
+
+
+@application.route('/test')
+@cross_origin()
+def test():
+    query_metadata = server.query_metadata
+    db = query_metadata['db']
+    query = "SHOW TABLES IN " + db
+    results = execute_query(query, False)
+    return json_to_string(results), 200
+
+
+@application.route('/ldap')
+@cross_origin()
+def ldap_login():
+    username = request.args.get('username')
+    print username
+    password = request.args.get('password')
+    if username is None or password is None:
+        raise Exception
+    ldap_conn = ldap.initialize(server.config['ldap_host'])
+    ldap.set_option(ldap.OPT_REFERRALS, 1)
+    ldap.set_option(ldap.OPT_PROTOCOL_VERSION, 3)
+    auth_tokens = ldap.sasl.gssapi()
+    ldap_conn.sasl_interactive_bind_s('', auth_tokens)
+
+    print ldap_conn.whoami_s()
+
+    base = server.config['ldap_base']
+
+    cn_search = ldap_conn.search_s(base, ldap.SCOPE_SUBTREE, 'samaccountname={}'.format(username))
+
+    print(cn_search[0][0])
+    cn = cn_search[0][0]
+
+    try:
+        ldap_conn.simple_bind_s(cn, password)
+    except ldap.LDAPError as error:
+        return load_error_message(error), 404
+    results = cn_search
+    return json_to_string(results), 200
+
+
+@application.route('/')
+@cross_origin()
+def welcome():
+    return '<h1>BIENVENIDO AL API DE BANCA DIGITAL</h1>'
+
+
+if __name__ == '__main__':
+    # application.run(debug=False, port=5000, host='0.0.0.0')
+    application.run(debug=False, port=5000, host='0.0.0.0',
+                    ssl_context=('/opt/cloudera/security/pki/agent.cert.pem', '/opt/cloudera/security/pki/agent.d.key'))
